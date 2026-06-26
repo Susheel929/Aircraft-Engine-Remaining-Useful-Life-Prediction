@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aircraft Engine RUL Prediction Dashboard</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.10.0/Recharts.js"></script>
+    <script src="https://unpkg.com/recharts@2.10.0/dist/Recharts.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif; }
+        .dashboard { background: linear-gradient(to bottom right, #0f172a, #1e293b, #0f172a); }
+    </style>
+</head>
+<body class="dashboard">
+    <div id="root"></div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+
+        // Dummy Chart component if recharts fails
+        const ChartComponent = ({ data, type }) => {
+            return (
+                <div style={{
+                    padding: '20px',
+                    background: 'rgba(30, 41, 59, 0.5)',
+                    borderRadius: '8px',
+                    textAlign: 'center',
+                    color: '#e2e8f0'
+                }}>
+                    <p style={{ margin: 0, marginBottom: '10px' }}>Chart Data Points: {data?.length || 0}</p>
+                    <pre style={{
+                        fontSize: '11px',
+                        textAlign: 'left',
+                        overflow: 'auto',
+                        maxHeight: '150px'
+                    }}>
+                        {JSON.stringify(data?.slice(0, 3), null, 2)}
+                    </pre>
+                </div>
+            );
+        };
+
+        function RULDashboard() {
+            const [activeTab, setActiveTab] = React.useState('overview');
+            const [engines, setEngines] = React.useState([]);
+            const [selectedEngine, setSelectedEngine] = React.useState(null);
+            const [engineDetail, setEngineDetail] = React.useState(null);
+            const [models, setModels] = React.useState([]);
+            const [overview, setOverview] = React.useState(null);
+            const [sensorCorrelation, setSensorCorrelation] = React.useState([]);
+            const [degradationTrend, setDegradationTrend] = React.useState(null);
+            const [maintenance, setMaintenance] = React.useState(null);
+            const [loading, setLoading] = React.useState(false);
+            const [selectedModel, setSelectedModel] = React.useState('LSTM');
+            const [currentCycle, setCurrentCycle] = React.useState(150);
+            const [error, setError] = React.useState(null);
+
+            // Fetch initial data
+            React.useEffect(() => {
+                fetchAllData();
+            }, []);
+
+            const fetchAllData = async () => {
+                setLoading(true);
+                setError(null);
+                try {
+                    const [enginesRes, modelsRes, overviewRes] = await Promise.all([
+                        fetch(`${API_BASE}/engines`),
+                        fetch(`${API_BASE}/models`),
+                        fetch(`${API_BASE}/overview`)
+                    ]);
+
+                    if (enginesRes.ok) setEngines(await enginesRes.json());
+                    if (modelsRes.ok) setModels(await modelsRes.json());
+                    if (overviewRes.ok) setOverview(await overviewRes.json());
+                } catch (err) {
+                    setError('Failed to fetch data. Make sure the backend is running on http://localhost:5000');
+                    console.error('Error:', err);
+                }
+                setLoading(false);
+            };
+
+            const selectEngine = async (engineId) => {
+                setSelectedEngine(engineId);
+                setLoading(true);
+                try {
+                    const [detailRes, trendRes, correlationRes] = await Promise.all([
+                        fetch(`${API_BASE}/engine/${engineId}`),
+                        fetch(`${API_BASE}/degradation-trend/${engineId}`),
+                        fetch(`${API_BASE}/sensor-correlation`)
+                    ]);
+
+                    if (detailRes.ok) setEngineDetail(await detailRes.json());
+                    if (trendRes.ok) setDegradationTrend(await trendRes.json());
+                    if (correlationRes.ok) setSensorCorrelation(await correlationRes.json());
+                } catch (err) {
+                    console.error('Error fetching engine detail:', err);
+                }
+                setLoading(false);
+            };
+
+            const runPrediction = async () => {
+                setLoading(true);
+                try {
+                    const sensorPayload = {};
+                    for (let i = 1; i <= 21; i++) {
+                        sensorPayload[`sensor_${i}`] = Math.random() * 300 + 200;
+                    }
+
+                    const predRes = await fetch(`${API_BASE}/predict`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            ...sensorPayload,
+                            current_cycle: currentCycle,
+                            model: selectedModel
+                        })
+                    });
+
+                    if (predRes.ok) {
+                        const pred = await predRes.json();
+                        
+                        const maintRes = await fetch(`${API_BASE}/maintenance-schedule`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ rul: pred.rul })
+                        });
+
+                        if (maintRes.ok) {
+                            setMaintenance(await maintRes.json());
+                        }
+                    }
+                } catch (err) {
+                    console.error('Error running prediction:', err);
+                }
+                setLoading(false);
+            };
+
+            const statusColor = (status) => {
+                if (status === 'Critical') return 'text-red-600 bg-red-50';
+                if (status === 'Monitor') return 'text-amber-600 bg-amber-50';
+                return 'text-green-600 bg-green-50';
+            };
+
+            const statusBg = (status) => {
+                if (status === 'Critical') return 'bg-red-900/30 border-red-500';
+                if (status === 'Monitor') return 'bg-amber-900/30 border-amber-500';
+                return 'bg-green-900/30 border-green-500';
+            };
+
+            return React.createElement('div', { className: 'min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-gray-100' },
+                // Header
+                React.createElement('div', { className: 'sticky top-0 z-50 border-b border-slate-700 bg-slate-900/95 backdrop-blur' },
+                    React.createElement('div', { className: 'max-w-7xl mx-auto px-6 py-4' },
+                        React.createElement('div', { className: 'flex items-center justify-between' },
+                            React.createElement('div', { className: 'flex items-center gap-3' },
+                                React.createElement('div', { className: 'w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center text-2xl' }, '⚙️'),
+                                React.createElement('div', null,
+                                    React.createElement('h1', { className: 'text-2xl font-bold text-white' }, 'Aircraft Engine RUL Prediction'),
+                                    React.createElement('p', { className: 'text-sm text-slate-400' }, 'Real-time predictive maintenance analytics')
+                                )
+                            ),
+                            React.createElement('button', {
+                                onClick: fetchAllData,
+                                disabled: loading,
+                                className: 'flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50'
+                            }, '🔄 Refresh')
+                        )
+                    )
+                ),
+
+                // Error Message
+                error && React.createElement('div', { className: 'max-w-7xl mx-auto px-6 py-4 mt-4' },
+                    React.createElement('div', { className: 'bg-red-900/30 border border-red-500 rounded-lg p-4 text-red-200' },
+                        React.createElement('strong', null, '⚠️ Connection Error: '),
+                        error
+                    )
+                ),
+
+                // Main Content
+                React.createElement('div', { className: 'max-w-7xl mx-auto px-6 py-6 space-y-6' },
+                    // Tabs
+                    React.createElement('div', { className: 'flex gap-2 border-b border-slate-700 overflow-x-auto' },
+                        ['overview', 'engines', 'prediction', 'analysis'].map(tab =>
+                            React.createElement('button', {
+                                key: tab,
+                                onClick: () => setActiveTab(tab),
+                                className: `px-4 py-3 font-medium text-sm transition-colors whitespace-nowrap ${activeTab === tab ? 'text-blue-400 border-b-2 border-blue-400' : 'text-slate-400 hover:text-slate-300'}`
+                            }, tab.charAt(0).toUpperCase() + tab.slice(1))
+                        )
+                    ),
+
+                    // OVERVIEW TAB
+                    activeTab === 'overview' && React.createElement('div', { className: 'space-y-6' },
+                        // KPI Cards
+                        React.createElement('div', { className: 'grid grid-cols-1 md:grid-cols-4 gap-4' },
+                            overview && [
+                                { label: 'Total Engines', value: overview.total_engines, icon: '🛩️', color: 'from-blue-600 to-blue-400' },
+                                { label: 'Average RUL', value: overview.avg_rul.toFixed(1), unit: 'cycles', icon: '⏱️', color: 'from-green-600 to-green-400' },
+                                { label: 'Healthy Engines', value: overview.healthy_engines, icon: '✅', color: 'from-emerald-600 to-emerald-400' },
+                                { label: 'Critical Engines', value: overview.critical_engines, icon: '⚠️', color: 'from-red-600 to-red-400' }
+                            ].map((card, idx) =>
+                                React.createElement('div', { key: idx, className: `bg-gradient-to-br ${card.color} rounded-lg p-6 text-white shadow-lg` },
+                                    React.createElement('div', { className: 'flex items-center justify-between mb-2' },
+                                        React.createElement('span', { className: 'text-2xl' }, card.icon),
+                                        React.createElement('span', { className: 'text-xs font-semibold opacity-75' }, 'METRIC')
+                                    ),
+                                    React.createElement('div', { className: 'text-3xl font-bold mb-1' }, card.value),
+                                    React.createElement('div', { className: 'text-sm opacity-90' }, card.label),
+                                    card.unit && React.createElement('div', { className: 'text-xs opacity-75 mt-1' }, card.unit)
+                                )
+                            )
+                        ),
+
+                        // Models Table
+                        React.createElement('div', { className: 'bg-slate-800 border border-slate-700 rounded-lg p-6' },
+                            React.createElement('h3', { className: 'text-lg font-bold mb-4' }, '📊 Model Performance'),
+                            React.createElement('div', { className: 'overflow-x-auto' },
+                                React.createElement('table', { className: 'w-full text-sm' },
+                                    React.createElement('thead', null,
+                                        React.createElement('tr', { className: 'border-b border-slate-700' },
+                                            React.createElement('th', { className: 'text-left py-3 px-4 text-slate-400 font-medium' }, 'Model'),
+                                            React.createElement('th', { className: 'text-right py-3 px-4 text-slate-400 font-medium' }, 'MSE'),
+                                            React.createElement('th', { className: 'text-right py-3 px-4 text-slate-400 font-medium' }, 'MAE'),
+                                            React.createElement('th', { className: 'text-right py-3 px-4 text-slate-400 font-medium' }, 'R² Score')
+                                        )
+                                    ),
+                                    React.createElement('tbody', null,
+                                        models.map(model =>
+                                            React.createElement('tr', { key: model.name, className: 'border-b border-slate-700 hover:bg-slate-700/50' },
+                                                React.createElement('td', { className: 'py-3 px-4 font-medium text-blue-300' }, model.name),
+                                                React.createElement('td', { className: 'text-right py-3 px-4' }, model.mse.toFixed(2)),
+                                                React.createElement('td', { className: 'text-right py-3 px-4' }, model.mae.toFixed(2)),
+                                                React.createElement('td', { className: 'text-right py-3 px-4 font-semibold text-green-400' }, model.r2.toFixed(4))
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+                        ),
+
+                        // Sensor Correlation
+                        React.createElement('div', { className: 'bg-slate-800 border border-slate-700 rounded-lg p-6' },
+                            React.createElement('h3', { className: 'text-lg font-bold mb-4' }, '📈 Top Sensor Correlations'),
+                            React.createElement('div', { className: 'space-y-3' },
+                                sensorCorrelation.slice(0, 5).map((item, idx) =>
+                                    React.createElement('div', { key: idx, className: 'flex items-center gap-3' },
+                                        React.createElement('div', { className: 'w-20 text-sm font-medium text-slate-300' }, item.sensor),
+                                        React.createElement('div', { className: 'flex-1 bg-slate-700 rounded-full h-2 overflow-hidden' },
+                                            React.createElement('div', {
+                                                className: Math.abs(item.correlation) > 0.5 ? 'bg-red-500 h-full' : 'bg-amber-500 h-full',
+                                                style: { width: `${Math.abs(item.correlation) * 100}%` }
+                                            })
+                                        ),
+                                        React.createElement('div', { className: 'w-12 text-right text-sm font-semibold text-slate-200' }, item.correlation.toFixed(3))
+                                    )
+                                )
+                            )
+                        )
+                    ),
+
+                    // ENGINES TAB
+                    activeTab === 'engines' && React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-3 gap-6' },
+                        React.createElement('div', { className: 'lg:col-span-1 bg-slate-800 border border-slate-700 rounded-lg p-4' },
+                            React.createElement('h3', { className: 'text-lg font-bold mb-4' }, 'Fleet Status'),
+                            React.createElement('div', { className: 'space-y-2 max-h-96 overflow-y-auto' },
+                                engines.map(engine =>
+                                    React.createElement('button', {
+                                        key: engine.engine_id,
+                                        onClick: () => selectEngine(engine.engine_id),
+                                        className: `w-full text-left p-3 rounded-lg transition-all ${selectedEngine === engine.engine_id ? 'bg-blue-600/30 border border-blue-500' : 'bg-slate-700/50 hover:bg-slate-700 border border-slate-600'}`
+                                    },
+                                        React.createElement('div', { className: 'flex items-center justify-between mb-1' },
+                                            React.createElement('span', { className: 'font-medium' }, `Engine ${engine.engine_id}`),
+                                            React.createElement('span', { className: `px-2 py-1 text-xs rounded font-semibold ${statusColor(engine.status)}` }, engine.status)
+                                        ),
+                                        React.createElement('div', { className: 'text-sm text-slate-400' }, `Cycle: ${engine.current_cycle} | RUL: ${engine.rul}`)
+                                    )
+                                )
+                            )
+                        ),
+
+                        selectedEngine && engineDetail && React.createElement('div', { className: 'lg:col-span-2 bg-slate-800 border border-slate-700 rounded-lg p-6' },
+                            React.createElement('h3', { className: 'text-lg font-bold mb-4' }, `Engine ${selectedEngine} - Details`),
+                            React.createElement(ChartComponent, { data: Array.from({ length: 10 }, (_, i) => ({ x: i, y: Math.random() * 100 })), type: 'line' }),
+                            React.createElement('div', { className: 'mt-4 p-4 bg-slate-700/50 rounded-lg' },
+                                React.createElement('div', { className: 'text-2xl font-bold text-blue-400 mb-2' }, `RUL: ${engineDetail.rul} cycles`),
+                                React.createElement('p', { className: 'text-sm text-slate-300' }, `Last cycle: ${engineDetail.cycles[engineDetail.cycles.length - 1]}`)
+                            )
+                        )
+                    ),
+
+                    // PREDICTION TAB
+                    activeTab === 'prediction' && React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-3 gap-6' },
+                        React.createElement('div', { className: 'lg:col-span-1 bg-slate-800 border border-slate-700 rounded-lg p-6 sticky top-24 h-fit' },
+                            React.createElement('h3', { className: 'text-lg font-bold mb-4' }, '⚙️ Prediction Config'),
+                            React.createElement('div', { className: 'space-y-4' },
+                                React.createElement('div', null,
+                                    React.createElement('label', { className: 'block text-sm font-medium mb-2 text-slate-300' }, 'Model'),
+                                    React.createElement('select', {
+                                        value: selectedModel,
+                                        onChange: (e) => setSelectedModel(e.target.value),
+                                        className: 'w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white'
+                                    },
+                                        React.createElement('option', null, 'LSTM'),
+                                        React.createElement('option', null, 'SVR'),
+                                        React.createElement('option', null, 'LinearRegression')
+                                    )
+                                ),
+                                React.createElement('div', null,
+                                    React.createElement('label', { className: 'block text-sm font-medium mb-2 text-slate-300' }, 'Current Cycle'),
+                                    React.createElement('input', {
+                                        type: 'number',
+                                        value: currentCycle,
+                                        onChange: (e) => setCurrentCycle(parseInt(e.target.value)),
+                                        min: '1',
+                                        className: 'w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white'
+                                    })
+                                ),
+                                React.createElement('button', {
+                                    onClick: runPrediction,
+                                    disabled: loading,
+                                    className: 'w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium py-3 rounded-lg transition-colors mt-6'
+                                }, loading ? 'Running...' : 'Run Prediction')
+                            )
+                        ),
+
+                        maintenance && React.createElement('div', { className: `lg:col-span-2 rounded-lg p-6 border ${statusBg(maintenance.level)}` },
+                            React.createElement('div', { className: 'flex items-start gap-4' },
+                                React.createElement('div', { className: 'text-4xl' }, maintenance.level === 'critical' ? '🔧' : maintenance.level === 'monitor' ? '⚠️' : '✅'),
+                                React.createElement('div', { className: 'flex-1' },
+                                    React.createElement('h4', { className: 'font-bold text-lg mb-1' }, maintenance.title),
+                                    React.createElement('p', { className: 'text-sm mb-4 opacity-90' }, maintenance.description),
+                                    React.createElement('div', { className: 'grid grid-cols-2 gap-4 mt-4' },
+                                        React.createElement('div', { className: 'bg-white/10 rounded-lg p-3' },
+                                            React.createElement('div', { className: 'text-xs font-semibold opacity-75' }, 'Action Window'),
+                                            React.createElement('div', { className: 'font-bold mt-1' }, maintenance.window)
+                                        ),
+                                        React.createElement('div', { className: 'bg-white/10 rounded-lg p-3' },
+                                            React.createElement('div', { className: 'text-xs font-semibold opacity-75' }, 'Priority'),
+                                            React.createElement('div', { className: 'font-bold mt-1' }, maintenance.priority)
+                                        )
+                                    ),
+                                    React.createElement('div', { className: 'mt-4' },
+                                        React.createElement('div', { className: 'text-sm font-semibold mb-2' }, 'Recommended Actions:'),
+                                        React.createElement('ul', { className: 'space-y-1' },
+                                            maintenance.actions.map((action, idx) =>
+                                                React.createElement('li', { key: idx, className: 'flex gap-2 text-sm' },
+                                                    React.createElement('span', null, '•'),
+                                                    React.createElement('span', null, action)
+                                                )
+                                            )
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    ),
+
+                    // ANALYSIS TAB
+                    activeTab === 'analysis' && React.createElement('div', { className: 'bg-slate-800 border border-slate-700 rounded-lg p-6' },
+                        React.createElement('h3', { className: 'text-lg font-bold mb-4' }, '📊 Degradation Analysis'),
+                        React.createElement('p', { className: 'text-slate-400' }, 'Select an engine to view detailed degradation trends and sensor analysis'),
+                        React.createElement(ChartComponent, { data: Array.from({ length: 20 }, (_, i) => ({ x: i, y: Math.random() * 100 })), type: 'line' })
+                    )
+                )
+            );
+        }
+
+        // Render the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(RULDashboard));
+    </script>
+</body>
+</html>
